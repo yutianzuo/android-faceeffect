@@ -20,8 +20,9 @@ import java.util.zip.ZipInputStream;
 final public class FaceTrackerManager {
     public static final String QH_FACE_MODEL_FOLDER_NAME = "model";
 
-    public static void initFaceSDK(Context context) {
-        QhFaceApi.qhFaceDetectInit(getAppDir(context) + QH_FACE_MODEL_FOLDER_NAME, 1);
+    public static int initFaceSDK(Context context) {
+        int nRet = QhFaceApi.qhFaceDetectInit(getAppDir(context) + QH_FACE_MODEL_FOLDER_NAME, 1);
+        return nRet;
     }
 
     public static void unInitFaceSDK() {
@@ -132,6 +133,43 @@ final public class FaceTrackerManager {
             }).start();
         } else {
             initFaceSDK(context);
+            return;
+        }
+    }
+
+    static public void copyAndUnzipResFiles(final Context context) {
+        String str_path = getAppDir(context) + "31034_1";
+        File folder_file = new File(str_path);
+
+        if (!folder_file.isDirectory() || folder_file.listFiles() == null || folder_file.listFiles().length <= 0) {
+            deleteFile(str_path);
+            new Thread(new Runnable() {
+                @Override
+                public void run() {
+                    String file_name = "31034_1" + ".zip";
+                    String file_out = getAppDir(context) + file_name;
+                    AssetManager assetManager = context.getAssets();
+                    int byteread = 0;
+                    try {
+                        InputStream is = assetManager.open(file_name);
+                        FileOutputStream fs = new FileOutputStream(file_out);
+                        byte[] buffer = new byte[2048];
+
+                        while ((byteread = is.read(buffer)) != -1) {
+                            fs.write(buffer, 0, byteread);
+                        }
+
+                        is.close();
+                        fs.close();
+                    } catch (Throwable e) {
+                        return;
+                    }
+
+                    unZipFolder(file_out, getAppDir(context));
+                    deleteFile(file_out);
+                }
+            }).start();
+        } else {
             return;
         }
     }

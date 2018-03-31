@@ -291,6 +291,7 @@ public class MainActivity extends AppCompatActivity implements SurfaceTexture.On
 
         LibYuv.init();
         FaceTrackerManager.copyAndUnzipModelFiles(this);
+        FaceTrackerManager.copyAndUnzipResFiles(this);
     }
 
     @Override
