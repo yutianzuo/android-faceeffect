@@ -4,6 +4,7 @@ import android.content.Context;
 import android.content.res.AssetManager;
 import android.os.Environment;
 
+import com.huajiao.render.EffectManager;
 import com.qihoo.faceapi.QhFaceApi;
 import com.qihoo.faceapi.util.QhFaceInfo;
 
@@ -137,7 +138,7 @@ final public class FaceTrackerManager {
         }
     }
 
-    static public void copyAndUnzipResFiles(final Context context) {
+    static public void copyAndUnzipResFiles(final Context context, final EffectManager effManager) {
         String str_path = getAppDir(context) + "31034_1";
         File folder_file = new File(str_path);
 
@@ -167,9 +168,11 @@ final public class FaceTrackerManager {
 
                     unZipFolder(file_out, getAppDir(context));
                     deleteFile(file_out);
+                    effManager.parseLocalConfig(context, "31034_1");
                 }
             }).start();
         } else {
+            effManager.parseLocalConfig(context, "31034_1");
             return;
         }
     }

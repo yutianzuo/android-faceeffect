@@ -1,6 +1,7 @@
 package com.huajiao;
 
 import android.graphics.ImageFormat;
+import android.graphics.PointF;
 import android.graphics.SurfaceTexture;
 import android.hardware.Camera;
 import android.opengl.GLSurfaceView;
@@ -25,9 +26,16 @@ import com.huajiao.opengl.Drawable2d;
 import com.huajiao.opengl.FullFrameRect;
 import com.huajiao.opengl.Sprite2d;
 import com.huajiao.opengl.Texture2dProgram;
+import com.huajiao.render.DrawEff;
+import com.huajiao.render.EffectManager;
+import com.qihoo.faceapi.util.QhFaceInfo;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.concurrent.ArrayBlockingQueue;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.TimeUnit;
 
 import javax.microedition.khronos.egl.EGLConfig;
 import javax.microedition.khronos.opengles.GL10;
@@ -69,6 +77,11 @@ public class MainActivity extends AppCompatActivity implements SurfaceTexture.On
     private List<Camera.Size> mSizesForCamera = null;
     private boolean mSupportFrontFalsh;
 
+    private int mCameraPreviewWidth;
+    private int mCameraPreviewHeight;
+    private int mCameraYuvScale = 8;
+    EffectManager effectManager = new EffectManager(this);
+    private float[] mDisplayProjectionMatrix = new float[16];
 
     @Override
     public void handleMessage(Message msg) {
@@ -142,6 +155,10 @@ public class MainActivity extends AppCompatActivity implements SurfaceTexture.On
         if (cameraSize == null) {
             return;
         }
+        mCameraPreviewWidth = cameraSize.width;
+        mCameraPreviewHeight = cameraSize.height;
+        android.opengl.Matrix.orthoM(mDisplayProjectionMatrix, 0, 0,
+                mCameraPreviewHeight, 0, mCameraPreviewWidth, -1, 1);
         setCameraFocusMode(mCamera, parameters);
         parameters.setPreviewSize(cameraSize.width, cameraSize.height);
         parameters.setPreviewFormat(ImageFormat.NV21);
@@ -291,7 +308,10 @@ public class MainActivity extends AppCompatActivity implements SurfaceTexture.On
 
         LibYuv.init();
         FaceTrackerManager.copyAndUnzipModelFiles(this);
-        FaceTrackerManager.copyAndUnzipResFiles(this);
+        FaceTrackerManager.copyAndUnzipResFiles(this, effectManager);
+        if (effectManager.GetPngTotalNum() > 0) {
+            mDrawEff.setCacheNum(effectManager.GetPngTotalNum());
+        }
     }
 
     @Override
@@ -306,6 +326,8 @@ public class MainActivity extends AppCompatActivity implements SurfaceTexture.On
     protected void onPause() {
         super.onPause();
         UninitCamera();
+        dataInner = null;
+        dataRotateScale = null;
     }
 
     @Override
@@ -315,9 +337,68 @@ public class MainActivity extends AppCompatActivity implements SurfaceTexture.On
         FaceTrackerManager.unInitFaceSDK();
     }
 
+    ExecutorService mFaceDetectPool = Executors.newSingleThreadExecutor();
+    byte[] dataInner;
+    byte[] dataRotateScale;
+    ArrayBlockingQueue<byte[]> mYuvBuff = new ArrayBlockingQueue<>(1);
+    DrawEff mDrawEff = new DrawEff();
+
+
     @Override
     public void onPreviewFrame(byte[] data, Camera camera) {
+        if (dataInner == null) {
+            dataInner = new byte[data.length];
+        }
+        System.arraycopy(data, 0, dataInner, 0, data.length);
+        if (!mYuvBuff.offer(dataInner)) {
+            mYuvBuff.clear();
+            mYuvBuff.offer(dataInner);
+        }
+        mFaceDetectPool.execute(new Runnable() {
+            @Override
+            public void run() {
+                byte[] tmpInner = null;
+                try {
+                    tmpInner = mYuvBuff.poll(0, TimeUnit.MILLISECONDS);
+                } catch (Throwable e) {
 
+                }
+                if (tmpInner == null) {
+                    return;
+                }
+                if (dataRotateScale == null) {
+                    dataRotateScale = new byte[(mCameraPreviewWidth / mCameraYuvScale *
+                            mCameraPreviewHeight / mCameraYuvScale) * 3 / 2];
+                }
+                int rotate = mRotationDegree;
+                if (mCameraHelper != null && mCameraHelper.isFrontCamera(mCameraId)) {
+                    //如果是前置摄像头，需要将预览图反转180度
+                    rotate = (mRotationDegree + 180) % 360;
+                }
+                LibYuv.turnAndRotation(tmpInner, mCameraPreviewWidth,
+                        mCameraPreviewHeight, dataRotateScale,
+                        mCameraPreviewHeight / mCameraYuvScale,
+                        mCameraPreviewWidth / mCameraYuvScale,
+                        rotate, 0, 1);
+
+                QhFaceInfo face = FaceTrackerManager.detectedFace(dataRotateScale,
+                        mCameraPreviewHeight / mCameraYuvScale,
+                        mCameraPreviewWidth / mCameraYuvScale);
+                synchronized (mDrawEff.stackLock) {
+                    mDrawEff.stackFacePonits.clear();
+                    if (face != null) {
+                        PointF[] points_tmp = face.getPointsArray();
+                        if (mCameraHelper.isFrontCamera(mCameraId)) {
+                            for (int i = 0; i < points_tmp.length; ++i) {
+                                points_tmp[i].x = mCameraPreviewHeight / mCameraYuvScale - points_tmp[i].x;
+                            }
+                        }
+                        mDrawEff.stackFacePonits.push(points_tmp);
+//                        Log.e("ytz", face.toString());
+                    }
+                }
+            }
+        });
     }
 
     @Override
@@ -406,6 +487,30 @@ public class MainActivity extends AppCompatActivity implements SurfaceTexture.On
             mSurfaceTexture.updateTexImage();
             mSurfaceTexture.getTransformMatrix(mSTMatrix);
             mFullScreen.drawFrame(mTextureId, mSTMatrix, false);
+
+            PointF[] points = null;
+            PointF[] points_dup = null;
+            int face_det_width = 0;
+            int face_det_height = 0;
+            synchronized (mDrawEff.stackLock) {
+                if (mDrawEff.stackFacePonits.size() > 0) {
+                    points = mDrawEff.stackFacePonits.peek();
+                    points_dup = new PointF[points.length];
+                    for (int i = 0; i < points.length; ++i) {
+                        points_dup[i] = new PointF();
+                        points_dup[i].x = points[i].x;
+                        points_dup[i].y = points[i].y;
+                    }
+                    face_det_width = mCameraPreviewHeight / mCameraYuvScale;
+                    face_det_height = mCameraPreviewWidth / mCameraYuvScale;
+                }
+            }
+            if (points_dup != null && points_dup.length > 0) {
+                mDrawEff.drawEffect(points_dup, face_det_width, face_det_height, mCameraPreviewHeight,
+                        mCameraPreviewWidth, mDisplayProjectionMatrix, (float) mCameraYuvScale,
+                        (float) mCameraYuvScale, effectManager, mTextureProgram, mRect,
+                        false, false);
+            }
         }
     }
 }
