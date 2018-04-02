@@ -31,6 +31,10 @@ import static android.opengl.GLES20.glGenTextures;
 import static android.opengl.GLES20.glGetError;
 import static android.opengl.GLES20.glTexParameterf;
 
+/**
+ * yutianzuo，calculate and draw decoration on face
+ */
+
 final public class DrawEff {
 
     float deltaTimeRender = 0.0f;

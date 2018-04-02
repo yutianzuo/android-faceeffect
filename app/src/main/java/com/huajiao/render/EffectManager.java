@@ -21,6 +21,10 @@ import java.io.StringReader;
 import java.util.ArrayList;
 import java.util.List;
 
+/**
+ * yutianzuo，analyze res package
+ */
+
 public class EffectManager {
     private static final String TAG = "EffectManager";
 

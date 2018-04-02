@@ -40,6 +40,10 @@ import java.util.concurrent.TimeUnit;
 import javax.microedition.khronos.egl.EGLConfig;
 import javax.microedition.khronos.opengles.GL10;
 
+/**
+ * yutianzuo，a demo for preview camera textures, with decoration on face
+ */
+
 public class MainActivity extends AppCompatActivity implements SurfaceTexture.OnFrameAvailableListener,
         Camera.PreviewCallback, WeakHandler.IHandler {
     public static final boolean bAutoFocus;
