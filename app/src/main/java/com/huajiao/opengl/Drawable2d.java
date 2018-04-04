@@ -20,6 +20,10 @@ import java.nio.FloatBuffer;
 
 /**
  * Base class for stuff we like to draw.
+ * yutianzuo,add comments
+ * 这个类定义了基本的一些顶点着色器用要用到的坐标
+ * 也定义了纹理所需要的坐标
+ * 具体看下面具体注释
  */
 public class Drawable2d {
     private static final int SIZEOF_FLOAT = 4;
@@ -71,6 +75,16 @@ public class Drawable2d {
      * <p>
      * The texture coordinates are Y-inverted relative to RECTANGLE.  (This seems to work out
      * right with external textures from SurfaceTexture.)
+     *
+     * yutianzuo add comments
+     * 上面的英文注释的意思是在解释两种坐标系，一种是OPENGL的世界坐标系，即FULL_RECTANGLE_COORDS，它的边界是+-1.0
+     * 以（0.0，0.0）原点为正中心。如下面这个坐标就是充满整个坐标系，可以理解为充满整个OPENGL要绘制的区域（即我们这个demo中填充满GLSurfaceview的控件）
+     * 上面所说的刚好充满还有一个前提就是MVP矩阵是一个单位阵（这里如果不清楚，找书，google吧。。。）
+     * 下面的坐标代表的是纹理坐标，即Texture的坐标。这个坐标系在pc平台是左下角（0，0）右上角（1，1）即以（0，0）为坐标起点，向右x轴正增长到1.0，向上y轴正增长到1.0
+     * 但是在android平台y轴是向下的即即以（0，0）为坐标起点，向右x轴正增长到1.0，向下y轴正增长到1.0（跟android屏幕的坐标系相同）
+     * 这里可以在上面RECTANGLE_COORDS和RECTANGLE_TEX_COORDS看的很清楚
+     * 但是这里的FULL_RECTANGLE_TEX_COORDS是很不一样的，为什么？因为配合surfacetexture的矩阵乘以这个坐标，最后得到的结果刚好是对的。
+     * 至于为什么这样，我现在也没有太搞清楚。
      */
     private static final float FULL_RECTANGLE_COORDS[] = {
         -1.0f, -1.0f,   // 0 bottom left

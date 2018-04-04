@@ -23,6 +23,9 @@ import java.nio.FloatBuffer;
 
 /**
  * GL program and supporting functions for textured 2D shapes.
+ * yutianzuo，add comments
+ * 这个类是渲染2d图的功能实现类，定义了若干顶点着色器和对应的片元着色器，用于特定的绘制功能
+ * 封装了opengl的相关绘制需要的函数
  */
 public class Texture2dProgram {
     private static final String TAG = GlUtil.TAG;
@@ -31,6 +34,13 @@ public class Texture2dProgram {
         TEXTURE_2D, TEXTURE_EXT, TEXTURE_EXT_BEAUTY, TEXTURE_EXT_SHAPEN,TEXTURE_EXT_BRIGHTNESS,
     }
 
+    /**
+     * yutianzuo add comments
+     * 以下是各种顶点着色器和片元着色器
+     * 片元着色器我们医用的都是EXT结尾的，因为我们用的是相机直接输出的Texture而不是bitmap生成的texture
+     * 如果是bitmap生成的Texture，如画脸部装饰这些，用的就是FRAGMENT_SHADER_2D这个片元着色器
+     * 这里有一些特效的顶点着色器和片元着色器，如美白，高亮等，具体的shader语法请查阅相关文档书籍。
+     */
     // Simple vertex shader, used for all programs.
     private static final String VERTEX_SHADER =
             "uniform mat4 uMVPMatrix;\n" +

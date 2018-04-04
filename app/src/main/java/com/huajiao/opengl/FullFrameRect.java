@@ -19,6 +19,10 @@ package com.huajiao.opengl;
 /**
  * This class essentially represents a viewport-sized sprite that will be rendered with
  * a texture, usually from an external source like the camera or video decoder.
+ *
+ * yutianzuo， add comments
+ * 这个类主要用于直接渲染直接充满屏幕这类的矩形渲染，典型的如相机预览渲染和播放器渲染图像。
+ * 如果需要更多的渲染方式，可以用Sprite2d这个类
  */
 public class FullFrameRect {
     private final Drawable2d mRectDrawable = new Drawable2d(Drawable2d.Prefab.FULL_RECTANGLE);

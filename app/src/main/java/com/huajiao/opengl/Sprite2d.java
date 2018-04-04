@@ -21,6 +21,10 @@ import android.opengl.Matrix;
 
 /**
  * Base class for a 2d object.  Includes position, scale, rotation, and flat-shaded color.
+ *
+ * yutianzuo，add comments
+ * 这个类是对FullFrameRect功能一个扩展，可以将2d贴图的矩阵进行各种变换，包括位移，旋转，缩放，设置投射矩阵等
+ * 以实现将一个贴图以任意的方式贴到已有的相机纹理上。
  */
 public class Sprite2d
 {
