@@ -389,9 +389,9 @@ public class MainActivity extends AppCompatActivity implements SurfaceTexture.On
                         mCameraPreviewHeight / mCameraYuvScale,
                         mCameraPreviewWidth / mCameraYuvScale);
                 synchronized (mDrawEff.stackLock) {
-                    if (mDrawEff.stackFacePonits.size() > 10) {
+//                    if (mDrawEff.stackFacePonits.size() > 10) {
                         mDrawEff.stackFacePonits.clear();
-                    }
+//                    }
                     if (face != null) {
                         PointF[] points_tmp = face.getPointsArray();
                         if (mCameraHelper.isFrontCamera(mCameraId)) {
