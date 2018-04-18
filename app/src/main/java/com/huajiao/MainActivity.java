@@ -1,9 +1,11 @@
 package com.huajiao;
 
+import android.graphics.Bitmap;
 import android.graphics.ImageFormat;
 import android.graphics.PointF;
 import android.graphics.SurfaceTexture;
 import android.hardware.Camera;
+import android.media.MediaActionSound;
 import android.opengl.GLSurfaceView;
 import android.os.Build;
 import android.os.Bundle;
@@ -13,6 +15,7 @@ import android.text.TextUtils;
 import android.util.DisplayMetrics;
 import android.util.Log;
 import android.view.View;
+import android.view.View.OnClickListener;
 import android.view.Window;
 import android.view.WindowManager;
 import android.widget.ImageButton;
@@ -25,11 +28,16 @@ import com.huajiao.jni.LibYuv;
 import com.huajiao.opengl.Drawable2d;
 import com.huajiao.opengl.FullFrameRect;
 import com.huajiao.opengl.Sprite2d;
+import com.huajiao.opengl.SurfaceContextSwap;
 import com.huajiao.opengl.Texture2dProgram;
 import com.huajiao.render.DrawEff;
 import com.huajiao.render.EffectManager;
 import com.qihoo.faceapi.util.QhFaceInfo;
 
+import java.io.FileNotFoundException;
+import java.io.FileOutputStream;
+import java.io.IOException;
+import java.nio.IntBuffer;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.ArrayBlockingQueue;
@@ -40,6 +48,11 @@ import java.util.concurrent.TimeUnit;
 import javax.microedition.khronos.egl.EGLConfig;
 import javax.microedition.khronos.opengles.GL10;
 
+import static android.opengl.GLES20.GL_RGBA;
+import static android.opengl.GLES20.GL_UNSIGNED_BYTE;
+import static android.opengl.GLES20.glReadPixels;
+import static android.opengl.GLES20.glViewport;
+
 /**
  * yutianzuo，a demo for preview camera textures, with decoration on face
  */
@@ -47,6 +60,9 @@ import javax.microedition.khronos.opengles.GL10;
 public class MainActivity extends AppCompatActivity implements SurfaceTexture.OnFrameAvailableListener,
         Camera.PreviewCallback, WeakHandler.IHandler {
     public static final boolean bAutoFocus;
+    public static final int MSG_SET_SURFACE_TEXTURE = 0;
+    private static final int GLVIEW_WIDTH = 1080; //控件大小
+    private static final int GLVIEW_HEIGHT = 1920;
 
     static {
         if (((Build.MODEL.contains("GT-I9505")) || (Build.MODEL.contains("GT-I9506")) ||
@@ -62,30 +78,31 @@ public class MainActivity extends AppCompatActivity implements SurfaceTexture.On
         }
     }
 
-    private static final int GLVIEW_WIDTH = 1080; //控件大小
-    private static final int GLVIEW_HEIGHT = 1920;
-
-    public static final int MSG_SET_SURFACE_TEXTURE = 0;
-
+    EffectManager effectManager = new EffectManager(this);
+    ExecutorService mFaceDetectPool = Executors.newSingleThreadExecutor();
+    byte[] dataInner;
+    byte[] dataRotateScale;
+    ArrayBlockingQueue<byte[]> mYuvBuff = new ArrayBlockingQueue<>(1);
+    DrawEff mDrawEff = new DrawEff();
     private DisplayMetrics mDm;
     private GLSurfaceView mGLView;
     private boolean mFirstAvailable = false;
     private CameraSufaceRender mRender = new CameraSufaceRender();
     private SurfaceTexture mCurrentSurfaceTexture;
     private WeakHandler mHandler = new WeakHandler(this);
-
     private Camera mCamera = null;
     private CameraHelper mCameraHelper = new CameraHelper();
     private int mCameraId = -1;
     private int mRotationDegree = 0;
     private List<Camera.Size> mSizesForCamera = null;
     private boolean mSupportFrontFalsh;
-
     private int mCameraPreviewWidth;
     private int mCameraPreviewHeight;
     private int mCameraYuvScale = 8;
-    EffectManager effectManager = new EffectManager(this);
     private float[] mDisplayProjectionMatrix = new float[16];
+
+    private boolean mTakePhoto = false;
+    private MediaActionSound mMediaActionSound;
 
     @Override
     public void handleMessage(Message msg) {
@@ -99,6 +116,86 @@ public class MainActivity extends AppCompatActivity implements SurfaceTexture.On
                 return;
             }
             startCameraPreview();
+        }
+    }
+
+    private void startCameraPreview() {
+        Log.e("ytz", "startCameraPreview");
+        try {
+            mCamera.setPreviewTexture(mCurrentSurfaceTexture);
+            mCamera.startPreview();
+        } catch (Throwable e) {
+            mCamera.release();
+            mCamera = null;
+        }
+    }
+
+    @Override
+    protected void onCreate(Bundle savedInstanceState) {
+        requestWindowFeature(Window.FEATURE_NO_TITLE);
+        getWindow().addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
+        super.onCreate(savedInstanceState);
+        setContentView(R.layout.activity_main);
+        mGLView = (GLSurfaceView) findViewById(R.id.camera_glview);
+        mGLView.setEGLContextClientVersion(2); //select opengles 2.0
+        mGLView.setRenderer(mRender);
+        mGLView.setRenderMode(GLSurfaceView.RENDERMODE_WHEN_DIRTY);
+
+        ImageButton btnSwitch = (ImageButton) findViewById(R.id.switch_btn);
+        btnSwitch.setOnClickListener(new View.OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                try {
+                    UninitCamera();
+                    if (mCameraId == mCameraHelper
+                            .getCameraId(Camera.CameraInfo.CAMERA_FACING_BACK)) {
+                        mCameraId = mCameraHelper
+                                .getCameraId(Camera.CameraInfo.CAMERA_FACING_FRONT);
+                    } else {
+                        mCameraId = mCameraHelper
+                                .getCameraId(Camera.CameraInfo.CAMERA_FACING_BACK);
+                    }
+                    mSizesForCamera = null;
+                    InitCamera();
+                    startCameraPreview();
+
+                } catch (Throwable e) {
+
+                }
+            }
+        });
+
+        ImageButton btnPhoto = (ImageButton) findViewById(R.id.capture_btn);
+        btnPhoto.setOnClickListener(new OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                mTakePhoto = true;
+                mMediaActionSound.play(MediaActionSound.SHUTTER_CLICK);
+            }
+        });
+
+        LibYuv.init();
+        FaceTrackerManager.copyAndUnzipModelFiles(this);
+        FaceTrackerManager.copyAndUnzipResFiles(this, effectManager);
+        if (effectManager.GetPngTotalNum() > 0) {
+            mDrawEff.setCacheNum(effectManager.GetPngTotalNum());
+        }
+
+        initShotClickSound();
+    }
+
+    private void UninitCamera() {
+        if (mCamera != null) {
+            try {
+                mCamera.setPreviewCallback(null);
+                mCamera.stopPreview();
+            } catch (Throwable e) {
+            }
+            try {
+                mCamera.release();
+            } catch (Throwable e) {
+            }
+            mCamera = null;
         }
     }
 
@@ -169,35 +266,45 @@ public class MainActivity extends AppCompatActivity implements SurfaceTexture.On
         parameters.setRecordingHint(true);
         mCamera.setParameters(parameters);
 
-
         //根据摄像头比利缩放控件，防止变形
         setPreviewSize(cameraSize);
     }
 
-    private void UninitCamera() {
-        if (mCamera != null) {
-            try {
-                mCamera.setPreviewCallback(null);
-                mCamera.stopPreview();
-            } catch (Throwable e) {
-            }
-            try {
-                mCamera.release();
-            } catch (Throwable e) {
-            }
-            mCamera = null;
-        }
+    private void initShotClickSound() {
+        mMediaActionSound = new MediaActionSound();
+        mMediaActionSound.load(MediaActionSound.SHUTTER_CLICK);
     }
 
-    private void startCameraPreview() {
-        Log.e("ytz", "startCameraPreview");
-        try {
-            mCamera.setPreviewTexture(mCurrentSurfaceTexture);
-            mCamera.startPreview();
-        } catch (Throwable e) {
-            mCamera.release();
-            mCamera = null;
+    private Camera.Size initCameraSizeFitPreviewSize(int textureviewWidth, int textureHeight, float ratio) {
+        Camera.Size sizeRet = null;
+        if (mSizesForCamera == null || mSizesForCamera.size() == 0) {
+            return sizeRet;
         }
+
+        for (int i = 0; i < mSizesForCamera.size(); i++) {
+            Camera.Size size = mSizesForCamera.get(i);
+            if (Math.min(size.width, size.height) == 720 &&
+                    Float.compare((float) Math.min(size.width, size.height) / Math.max(size.width, size.height), ratio)
+                            == 0
+                    ) { //first round find 720p
+
+                sizeRet = size;
+                return sizeRet;
+            }
+        }
+
+        for (int i = 0; i < mSizesForCamera.size(); i++) { //second roud find 16:9 && size > preview size
+            Camera.Size size = mSizesForCamera.get(i);
+            if (Math.min(size.width, size.height) >= textureviewWidth &&
+                    Math.max(size.width, size.height) >= textureHeight &&
+                    Float.compare((float) Math.min(size.width, size.height) / Math.max(size.width, size.height), ratio)
+                            == 0) {
+                sizeRet = size;
+                return sizeRet;
+            }
+        }
+
+        return sizeRet;
     }
 
     private boolean setCameraFocusMode(Camera paramCamera, Camera.Parameters paramParameters) {
@@ -225,41 +332,12 @@ public class MainActivity extends AppCompatActivity implements SurfaceTexture.On
         return false;
     }
 
-    private Camera.Size initCameraSizeFitPreviewSize(int textureviewWidth, int textureHeight, float ratio) {
-        Camera.Size sizeRet = null;
-        if (mSizesForCamera == null || mSizesForCamera.size() == 0) {
-            return sizeRet;
-        }
-
-        for (int i = 0; i < mSizesForCamera.size(); i++) {
-            Camera.Size size = mSizesForCamera.get(i);
-            if (Math.min(size.width, size.height) == 720 &&
-                    Float.compare((float) Math.min(size.width, size.height) / Math.max(size.width, size.height), ratio) == 0
-                    ) { //first round find 720p
-
-                sizeRet = size;
-                return sizeRet;
-            }
-        }
-
-        for (int i = 0; i < mSizesForCamera.size(); i++) { //second roud find 16:9 && size > preview size
-            Camera.Size size = mSizesForCamera.get(i);
-            if (Math.min(size.width, size.height) >= textureviewWidth &&
-                    Math.max(size.width, size.height) >= textureHeight &&
-                    Float.compare((float) Math.min(size.width, size.height) / Math.max(size.width, size.height), ratio) == 0) {
-                sizeRet = size;
-                return sizeRet;
-            }
-        }
-
-        return sizeRet;
-    }
-
     private void setPreviewSize(Camera.Size cameraSize) {
         int textureWidth = GLVIEW_WIDTH;
         int textureHeight = GLVIEW_HEIGHT;
         float ratioView = (float) textureWidth / textureHeight;
-        float ratioCamera = (float) Math.min(cameraSize.width, cameraSize.height) / Math.max(cameraSize.width, cameraSize.height);
+        float ratioCamera = (float) Math.min(cameraSize.width, cameraSize.height) / Math
+                .max(cameraSize.width, cameraSize.height);
 
         int textureWidthfinal = textureWidth;
         int textureHeightfinal = textureHeight;
@@ -276,54 +354,10 @@ public class MainActivity extends AppCompatActivity implements SurfaceTexture.On
     }
 
     @Override
-    protected void onCreate(Bundle savedInstanceState) {
-        requestWindowFeature(Window.FEATURE_NO_TITLE);
-        getWindow().addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
-        super.onCreate(savedInstanceState);
-        setContentView(R.layout.activity_main);
-        mGLView = (GLSurfaceView) findViewById(R.id.camera_glview);
-        mGLView.setEGLContextClientVersion(2); //select opengles 2.0
-        mGLView.setRenderer(mRender);
-        mGLView.setRenderMode(GLSurfaceView.RENDERMODE_WHEN_DIRTY);
-
-        ImageButton btnSwitch = (ImageButton) findViewById(R.id.switch_btn);
-        btnSwitch.setOnClickListener(new View.OnClickListener() {
-            @Override
-            public void onClick(View v) {
-                try {
-                    UninitCamera();
-                    if (mCameraId == mCameraHelper
-                            .getCameraId(Camera.CameraInfo.CAMERA_FACING_BACK)) {
-                        mCameraId = mCameraHelper
-                                .getCameraId(Camera.CameraInfo.CAMERA_FACING_FRONT);
-                    } else {
-                        mCameraId = mCameraHelper
-                                .getCameraId(Camera.CameraInfo.CAMERA_FACING_BACK);
-                    }
-                    mSizesForCamera = null;
-                    InitCamera();
-                    startCameraPreview();
-
-                } catch (Throwable e) {
-
-                }
-            }
-        });
-
-        LibYuv.init();
-        FaceTrackerManager.copyAndUnzipModelFiles(this);
-        FaceTrackerManager.copyAndUnzipResFiles(this, effectManager);
-        if (effectManager.GetPngTotalNum() > 0) {
-            mDrawEff.setCacheNum(effectManager.GetPngTotalNum());
-        }
-    }
-
-    @Override
-    protected void onResume() {
-        super.onResume();
-        Log.e("ytz", "onResume1");
-        InitCamera();
-        Log.e("ytz", "onResume2");
+    protected void onDestroy() {
+        super.onDestroy();
+        LibYuv.uninit();
+        FaceTrackerManager.unInitFaceSDK();
     }
 
     @Override
@@ -335,18 +369,12 @@ public class MainActivity extends AppCompatActivity implements SurfaceTexture.On
     }
 
     @Override
-    protected void onDestroy() {
-        super.onDestroy();
-        LibYuv.uninit();
-        FaceTrackerManager.unInitFaceSDK();
+    protected void onResume() {
+        super.onResume();
+        Log.e("ytz", "onResume1");
+        InitCamera();
+        Log.e("ytz", "onResume2");
     }
-
-    ExecutorService mFaceDetectPool = Executors.newSingleThreadExecutor();
-    byte[] dataInner;
-    byte[] dataRotateScale;
-    ArrayBlockingQueue<byte[]> mYuvBuff = new ArrayBlockingQueue<>(1);
-    DrawEff mDrawEff = new DrawEff();
-
 
     @Override
     public void onPreviewFrame(byte[] data, Camera camera) {
@@ -390,7 +418,7 @@ public class MainActivity extends AppCompatActivity implements SurfaceTexture.On
                         mCameraPreviewWidth / mCameraYuvScale);
                 synchronized (mDrawEff.stackLock) {
 //                    if (mDrawEff.stackFacePonits.size() > 10) {
-                        mDrawEff.stackFacePonits.clear();
+                    mDrawEff.stackFacePonits.clear();
 //                    }
                     if (face != null) {
                         PointF[] points_tmp = face.getPointsArray();
@@ -425,7 +453,6 @@ public class MainActivity extends AppCompatActivity implements SurfaceTexture.On
         mGLView.requestRender();
     }
 
-
     ///////////////////////////////////////////////////////////////////////////////////////////////
 
     /**
@@ -434,6 +461,8 @@ public class MainActivity extends AppCompatActivity implements SurfaceTexture.On
      * GLSurfaceView#queueEvent() call.
      */
     class CameraSufaceRender implements GLSurfaceView.Renderer {
+        private final float[] mSTMatrix = new float[16];
+        SurfaceContextSwap m_EglContext;
         private FullFrameRect mFullScreen;
         private Drawable2d mRectDrawable;
         private Sprite2d mRect;
@@ -441,8 +470,6 @@ public class MainActivity extends AppCompatActivity implements SurfaceTexture.On
         private int mTextureId;
         private boolean mNeedUpdateEgl = false;
         private SurfaceTexture mSurfaceTexture;
-        private final float[] mSTMatrix = new float[16];
-
 
         @Override
         public void onSurfaceCreated(GL10 gl, EGLConfig config) {
@@ -492,8 +519,54 @@ public class MainActivity extends AppCompatActivity implements SurfaceTexture.On
 //            Log.e("ytz", "onDrawFrame");
             mSurfaceTexture.updateTexImage();
             mSurfaceTexture.getTransformMatrix(mSTMatrix);
-            mFullScreen.drawFrame(mTextureId, mSTMatrix, false);
+            draw(false, false);
 
+            if (mTakePhoto) {
+                mTakePhoto = false;
+                if (m_EglContext == null) {
+                    m_EglContext = new SurfaceContextSwap(mCameraPreviewHeight, mCameraPreviewWidth);
+                }
+                m_EglContext.enterGLContext();
+                glViewport(0, 0, mCameraPreviewHeight, mCameraPreviewWidth);
+                draw(false, false);
+
+                final IntBuffer ib = IntBuffer.allocate(mCameraPreviewHeight * mCameraPreviewWidth);
+                glReadPixels(0, 0, mCameraPreviewHeight, mCameraPreviewWidth, GL_RGBA, GL_UNSIGNED_BYTE, ib);
+
+                new Thread(new Runnable() {
+                    @Override
+                    public void run() {
+                        if (ib != null) {
+                            try {
+                                IntBuffer ibt = IntBuffer.allocate(mCameraPreviewHeight * mCameraPreviewWidth);
+                                // Convert upside down mirror-reversed image to right-side up normal
+                                // image.
+                                for (int i = 0; i < mCameraPreviewWidth; i++) {
+                                    for (int j = 0; j < mCameraPreviewHeight; j++) {
+                                        ibt.put((mCameraPreviewWidth - i - 1) * mCameraPreviewHeight + j, ib.get(i *
+                                                mCameraPreviewHeight + j));
+                                    }
+                                }
+
+                                Bitmap bm = Bitmap.createBitmap(mCameraPreviewHeight, mCameraPreviewWidth,
+                                        Bitmap.Config.ARGB_8888);
+                                bm.copyPixelsFromBuffer(ibt);
+
+                                savePic(bm, "sdcard/faceeff" + System.currentTimeMillis() + ".jpeg");
+                            } catch (Throwable e) {
+
+                            }
+                        }
+                    }
+                }).start();
+
+                m_EglContext.leaveGLContext();
+                glViewport(0, 0, GLVIEW_WIDTH, GLVIEW_HEIGHT);
+            }
+        }
+
+        private void draw(boolean mirror, boolean onlyRenderOrEncoder) {
+            mFullScreen.drawFrame(mTextureId, mSTMatrix, mirror);
             PointF[] points = null;
             PointF[] points_dup = null;
             int face_det_width = 0;
@@ -515,7 +588,28 @@ public class MainActivity extends AppCompatActivity implements SurfaceTexture.On
                 mDrawEff.drawEffect(points_dup, face_det_width, face_det_height, mCameraPreviewHeight,
                         mCameraPreviewWidth, mDisplayProjectionMatrix, (float) mCameraYuvScale,
                         (float) mCameraYuvScale, effectManager, mTextureProgram, mRect,
-                        false, false);
+                        onlyRenderOrEncoder, mirror);
+            }
+        }
+
+        private void savePic(Bitmap b, String strFileName) {
+            if (b == null) {
+                return;
+            }
+            FileOutputStream fos = null;
+
+            int rate = 85;
+            try {
+                fos = new FileOutputStream(strFileName);
+                if (null != fos) {
+                    b.compress(Bitmap.CompressFormat.JPEG, rate, fos);
+                    fos.flush();
+                    fos.close();
+                }
+            } catch (FileNotFoundException e) {
+                e.printStackTrace();
+            } catch (IOException e) {
+                e.printStackTrace();
             }
         }
     }
